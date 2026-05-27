@@ -490,6 +490,19 @@ setup_vim() {
 install_fonts() {
   step "Installing Nerd Font (MesloLGS NF)"
 
+  # Skip on headless/SSH environments -- fonts are rendered by the LOCAL terminal
+  if [[ -n "${SSH_CONNECTION:-}" || -n "${SSH_TTY:-}" ]]; then
+    info "SSH session detected -- skipping font install"
+    info "Install fonts on your LOCAL machine instead (where your terminal app runs)"
+    return
+  fi
+
+  # Skip if no display (headless Linux server)
+  if [[ "$(os_type)" == "linux" && -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
+    info "Headless environment detected -- skipping font install"
+    return
+  fi
+
   local font_dir
   if [[ "$(os_type)" == "macos" ]]; then
     font_dir="$HOME/Library/Fonts"
@@ -522,8 +535,14 @@ install_fonts() {
     return
   fi
 
+  info "Downloading fonts (timeout 15s per file)..."
   for i in "${!fonts[@]}"; do
-    curl -fsSL "$base_url/${fonts[$i]}" -o "$font_dir/${names[$i]}"
+    if ! curl -fsSL --connect-timeout 10 --max-time 15 \
+         "$base_url/${fonts[$i]}" -o "$font_dir/${names[$i]}" 2>/dev/null; then
+      warn "Font download failed/timed out -- skipping fonts"
+      warn "Download manually from: https://github.com/romkatv/powerlevel10k#fonts"
+      return
+    fi
   done
 
   # Refresh font cache on Linux
