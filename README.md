@@ -6,7 +6,7 @@ Clone this repo on any new machine, run one command, done.
 ## Quick Start
 
 ```bash
-git clone https://github.com/<your-username>/terminal-automation.git
+git clone https://github.com/Wangzehao-sun/terminal-automation.git
 cd terminal-automation
 ./setup.sh
 ```
