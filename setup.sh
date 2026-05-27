@@ -231,8 +231,7 @@ _build_zsh() {
   LDFLAGS="-L$LOCAL_PREFIX/lib" \
   CPPFLAGS="-I$LOCAL_PREFIX/include" \
     ./configure --prefix="$LOCAL_PREFIX" \
-      --enable-multibyte \
-      --without-tcsetpgrp 2>&1 | tail -3
+      --enable-multibyte 2>&1 | tail -3
   make -j"$(nproc 2>/dev/null || echo 2)" 2>&1 | tail -3
   make install 2>&1 | tail -3
   cd "$REPO_DIR"
