@@ -3,6 +3,7 @@
 # ║  Terminal Environment Setup                                                  ║
 # ║  One-click configuration for zsh + tmux + vim                                ║
 # ║  Supports: macOS (Homebrew) / Linux (apt, dnf, yum, pacman, apk)             ║
+# ║  Works with or without sudo privileges                                       ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 set -euo pipefail
 
@@ -10,6 +11,7 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_DIR="$REPO_DIR/config"
 BACKUP_DIR="$HOME/.dotfiles-backup/$(date +%Y%m%d_%H%M%S)"
+HAS_SUDO=false
 
 # ─── Colors & Formatting ─────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -56,11 +58,26 @@ pkg_manager() {
   fi
 }
 
+# Check if we have sudo access (without prompting for password)
+check_sudo() {
+  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    HAS_SUDO=true
+  elif sudo -n true 2>/dev/null; then
+    HAS_SUDO=true
+  else
+    HAS_SUDO=false
+  fi
+}
+
 sudo_run() {
   if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
     "$@"
-  else
+  elif $HAS_SUDO; then
     sudo "$@"
+  else
+    # Should not reach here if logic is correct
+    error "No sudo access for: $*"
+    return 1
   fi
 }
 
@@ -68,10 +85,22 @@ sudo_run() {
 install_pkg() {
   local mgr
   mgr="$(pkg_manager)"
-  info "Installing: $* (via $mgr)"
 
+  # brew doesn't need sudo
+  if [[ "$mgr" == "brew" ]]; then
+    info "Installing: $* (via brew)"
+    brew install "$@"
+    return
+  fi
+
+  # Other package managers need sudo
+  if ! $HAS_SUDO; then
+    warn "Cannot install '$*': no sudo access"
+    return 1
+  fi
+
+  info "Installing: $* (via $mgr)"
   case "$mgr" in
-    brew)   brew install "$@" ;;
     apt)    sudo_run apt-get install -y "$@" ;;
     dnf)    sudo_run dnf install -y "$@" ;;
     yum)    sudo_run yum install -y "$@" ;;
@@ -127,12 +156,19 @@ install_prerequisites() {
   local OS
   OS="$(os_type)"
 
-  # Install Homebrew on macOS if missing
+  # Detect sudo availability
+  check_sudo
+  if $HAS_SUDO; then
+    info "Sudo access: available"
+  else
+    warn "Sudo access: unavailable (user-level setup only)"
+  fi
+
+  # Install Homebrew on macOS if missing (doesn't need sudo on modern macOS)
   if [[ "$OS" == "macos" ]] && ! has brew; then
     info "Installing Homebrew..."
     NONINTERACTIVE=1 /bin/bash -c \
       "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-    # Source brew for this session
     if [[ -x /opt/homebrew/bin/brew ]]; then
       eval "$(/opt/homebrew/bin/brew shellenv)"
     elif [[ -x /usr/local/bin/brew ]]; then
@@ -141,30 +177,50 @@ install_prerequisites() {
     success "Homebrew installed"
   fi
 
-  # Update package index on apt-based systems
-  if [[ "$(pkg_manager)" == "apt" ]]; then
+  # Update package index on apt-based systems (if we have sudo)
+  if [[ "$(pkg_manager)" == "apt" ]] && $HAS_SUDO; then
     info "Updating apt package index..."
     sudo_run apt-get update -qq
   fi
 
-  # Required tools
-  local needed=()
-  has git  || needed+=(git)
-  has zsh  || needed+=(zsh)
-  has tmux || needed+=(tmux)
-  has vim  || needed+=(vim)
-  has curl || needed+=(curl)
+  # Check which tools are missing
+  local missing=()
+  has git  || missing+=(git)
+  has zsh  || missing+=(zsh)
+  has tmux || missing+=(tmux)
+  has vim  || missing+=(vim)
+  has curl || missing+=(curl)
 
-  if [[ ${#needed[@]} -gt 0 ]]; then
-    install_pkg "${needed[@]}"
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    if $HAS_SUDO || [[ "$(pkg_manager)" == "brew" ]]; then
+      install_pkg "${missing[@]}"
+    else
+      warn "Missing tools: ${missing[*]}"
+      warn "No sudo access -- cannot install system packages"
+
+      # Check which critical tools are truly missing (git & curl are essential)
+      local critical_missing=()
+      has git  || critical_missing+=(git)
+      has curl || critical_missing+=(curl)
+
+      if [[ ${#critical_missing[@]} -gt 0 ]]; then
+        die "Cannot proceed without: ${critical_missing[*]}. Ask your admin to install them."
+      fi
+
+      # zsh/tmux/vim are nice-to-have; we can still deploy configs
+      if ! has zsh; then
+        warn "zsh not found -- will deploy .zshrc anyway (usable once zsh is installed)"
+      fi
+      if ! has tmux; then
+        warn "tmux not found -- will deploy .tmux.conf anyway"
+      fi
+      if ! has vim; then
+        warn "vim not found -- will deploy .vimrc anyway"
+      fi
+    fi
   fi
 
-  # Verify
-  for cmd in git zsh tmux vim curl; do
-    has "$cmd" || die "$cmd failed to install"
-  done
-
-  success "All prerequisites satisfied"
+  success "Prerequisite check complete"
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -293,6 +349,11 @@ install_fonts() {
 set_default_shell() {
   step "Setting default shell"
 
+  if ! has zsh; then
+    warn "zsh not installed -- skipping shell change"
+    return
+  fi
+
   local zsh_path
   zsh_path="$(command -v zsh)"
 
@@ -301,6 +362,33 @@ set_default_shell() {
     return
   fi
 
+  # Without sudo: can't modify /etc/shells or run chsh reliably
+  if ! $HAS_SUDO; then
+    warn "No sudo access -- cannot change default shell"
+    info "Workaround: adding 'exec zsh' to ~/.bashrc"
+
+    # Add exec zsh to .bashrc if not already there
+    local bashrc="$HOME/.bashrc"
+    local marker="# >>> terminal-automation: auto-launch zsh >>>"
+    if [[ -f "$bashrc" ]] && grep -qF "$marker" "$bashrc"; then
+      success "Auto-launch zsh already configured in ~/.bashrc"
+    else
+      cat >> "$bashrc" <<'BASHRC'
+
+# >>> terminal-automation: auto-launch zsh >>>
+# Automatically start zsh when bash is launched interactively.
+# Remove this block if you want to revert to bash.
+if [ -x "$(command -v zsh)" ] && [ -z "$ZSH_VERSION" ]; then
+  exec zsh -l
+fi
+# <<< terminal-automation: auto-launch zsh <<<
+BASHRC
+      success "Added auto-launch zsh to ~/.bashrc"
+    fi
+    return
+  fi
+
+  # With sudo: standard chsh approach
   # Ensure zsh is in /etc/shells
   if ! grep -qx "$zsh_path" /etc/shells 2>/dev/null; then
     info "Adding $zsh_path to /etc/shells"
