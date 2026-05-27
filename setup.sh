@@ -484,7 +484,56 @@ setup_vim() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  STEP 5: Nerd Font (for Powerlevel10k icons)
+#  STEP 5: Conda initialization
+# ══════════════════════════════════════════════════════════════════════════════
+setup_conda() {
+  step "Configuring Conda"
+
+  # Find conda binary in common locations
+  local conda_bin=""
+  local search_paths=(
+    "$HOME/anaconda3/bin/conda"
+    "$HOME/miniconda3/bin/conda"
+    "$HOME/miniforge3/bin/conda"
+    "/opt/homebrew/anaconda3/bin/conda"
+    "/opt/homebrew/Caskroom/miniconda/base/bin/conda"
+    "/usr/local/anaconda3/bin/conda"
+    "/usr/local/miniconda3/bin/conda"
+    "/opt/anaconda3/bin/conda"
+    "/opt/miniconda3/bin/conda"
+    "/opt/conda/bin/conda"
+  )
+
+  # Check if conda is already in PATH
+  if has conda; then
+    conda_bin="$(command -v conda)"
+  else
+    for p in "${search_paths[@]}"; do
+      if [[ -x "$p" ]]; then
+        conda_bin="$p"
+        break
+      fi
+    done
+  fi
+
+  if [[ -z "$conda_bin" ]]; then
+    info "Conda not found -- skipping (install conda later and run: conda init zsh)"
+    return
+  fi
+
+  info "Found conda: $conda_bin"
+  info "Running conda init zsh..."
+
+  # Run conda init zsh to inject the proper initialization block into ~/.zshrc
+  "$conda_bin" init zsh 2>&1 | grep -v "^$" | while read -r line; do
+    info "  $line"
+  done
+
+  success "Conda initialized for zsh"
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  STEP 6: Nerd Font (for Powerlevel10k icons)
 # ══════════════════════════════════════════════════════════════════════════════
 install_fonts() {
   step "Installing Nerd Font (MesloLGS NF)"
@@ -671,6 +720,7 @@ main() {
   setup_zsh
   setup_tmux
   setup_vim
+  setup_conda
   install_fonts
   set_default_shell
   ensure_persistent_path
