@@ -135,7 +135,7 @@ _build_zsh() {
   if has zsh; then return; fi
   info "Building zsh from source (into $LOCAL_PREFIX)..."
 
-  local version="5.9.1"
+  local version="5.9"
   local url="https://sourceforge.net/projects/zsh/files/zsh/${version}/zsh-${version}.tar.xz/download"
   local src_dir="$LOCAL_SRC/zsh-${version}"
 
