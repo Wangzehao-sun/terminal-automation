@@ -3,7 +3,7 @@
 # ║  Terminal Environment Setup                                                  ║
 # ║  One-click configuration for zsh + tmux + vim                                ║
 # ║  Supports: macOS (Homebrew) / Linux (apt, dnf, yum, pacman, apk)             ║
-# ║  Works with or without sudo privileges                                       ║
+# ║  Works with or without sudo privileges (builds from source if needed)        ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 set -euo pipefail
 
@@ -11,6 +11,8 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_DIR="$REPO_DIR/config"
 BACKUP_DIR="$HOME/.dotfiles-backup/$(date +%Y%m%d_%H%M%S)"
+LOCAL_PREFIX="$HOME/.local"
+LOCAL_SRC="$HOME/.local/src"
 HAS_SUDO=false
 
 # ─── Colors & Formatting ─────────────────────────────────────────────────────
@@ -75,13 +77,20 @@ sudo_run() {
   elif $HAS_SUDO; then
     sudo "$@"
   else
-    # Should not reach here if logic is correct
     error "No sudo access for: $*"
     return 1
   fi
 }
 
-# ─── Package Installation ────────────────────────────────────────────────────
+# Ensure ~/.local/bin is in PATH for this session
+ensure_local_path() {
+  mkdir -p "$LOCAL_PREFIX/bin"
+  if [[ ":$PATH:" != *":$LOCAL_PREFIX/bin:"* ]]; then
+    export PATH="$LOCAL_PREFIX/bin:$PATH"
+  fi
+}
+
+# ─── Package Installation (system-level) ─────────────────────────────────────
 install_pkg() {
   local mgr
   mgr="$(pkg_manager)"
@@ -93,9 +102,7 @@ install_pkg() {
     return
   fi
 
-  # Other package managers need sudo
   if ! $HAS_SUDO; then
-    warn "Cannot install '$*': no sudo access"
     return 1
   fi
 
@@ -106,8 +113,138 @@ install_pkg() {
     yum)    sudo_run yum install -y "$@" ;;
     pacman) sudo_run pacman -S --needed --noconfirm "$@" ;;
     apk)    sudo_run apk add --no-cache "$@" ;;
-    *)      die "No supported package manager found. Install manually: $*" ;;
+    *)      return 1 ;;
   esac
+}
+
+# ─── Build from Source (user-level, no sudo) ─────────────────────────────────
+install_from_source() {
+  local tool="$1"
+  ensure_local_path
+  mkdir -p "$LOCAL_SRC"
+
+  case "$tool" in
+    zsh)   _build_zsh ;;
+    tmux)  _build_tmux ;;
+    vim)   _build_vim ;;
+    *)     die "Don't know how to build: $tool" ;;
+  esac
+}
+
+_build_zsh() {
+  if has zsh; then return; fi
+  info "Building zsh from source (into $LOCAL_PREFIX)..."
+
+  local version="5.9.1"
+  local url="https://sourceforge.net/projects/zsh/files/zsh/${version}/zsh-${version}.tar.xz/download"
+  local src_dir="$LOCAL_SRC/zsh-${version}"
+
+  if [[ ! -d "$src_dir" ]]; then
+    curl -fsSL "$url" -o "$LOCAL_SRC/zsh-${version}.tar.xz"
+    tar -xf "$LOCAL_SRC/zsh-${version}.tar.xz" -C "$LOCAL_SRC"
+    rm -f "$LOCAL_SRC/zsh-${version}.tar.xz"
+  fi
+
+  cd "$src_dir"
+  ./configure --prefix="$LOCAL_PREFIX" --without-tcsetpgrp 2>&1 | tail -3
+  make -j"$(nproc 2>/dev/null || echo 2)" 2>&1 | tail -3
+  make install 2>&1 | tail -3
+  cd "$REPO_DIR"
+
+  has zsh && success "zsh $version installed to $LOCAL_PREFIX/bin/zsh" \
+          || die "zsh build failed"
+}
+
+_build_tmux() {
+  if has tmux; then return; fi
+  info "Building tmux from source (into $LOCAL_PREFIX)..."
+
+  # ── libevent (tmux dependency) ──
+  if [[ ! -f "$LOCAL_PREFIX/lib/libevent.a" ]]; then
+    local ev_version="2.1.12"
+    local ev_url="https://github.com/libevent/libevent/releases/download/release-${ev_version}-stable/libevent-${ev_version}-stable.tar.gz"
+    local ev_dir="$LOCAL_SRC/libevent-${ev_version}-stable"
+
+    if [[ ! -d "$ev_dir" ]]; then
+      info "Building dependency: libevent ${ev_version}"
+      curl -fsSL "$ev_url" -o "$LOCAL_SRC/libevent.tar.gz"
+      tar -xzf "$LOCAL_SRC/libevent.tar.gz" -C "$LOCAL_SRC"
+      rm -f "$LOCAL_SRC/libevent.tar.gz"
+    fi
+
+    cd "$ev_dir"
+    ./configure --prefix="$LOCAL_PREFIX" --disable-shared 2>&1 | tail -3
+    make -j"$(nproc 2>/dev/null || echo 2)" 2>&1 | tail -3
+    make install 2>&1 | tail -3
+    cd "$REPO_DIR"
+  fi
+
+  # ── ncurses (tmux dependency, if not present) ──
+  if [[ ! -f "$LOCAL_PREFIX/lib/libncurses.a" ]] && ! pkg-config ncurses 2>/dev/null; then
+    local nc_version="6.4"
+    local nc_url="https://ftp.gnu.org/gnu/ncurses/ncurses-${nc_version}.tar.gz"
+    local nc_dir="$LOCAL_SRC/ncurses-${nc_version}"
+
+    if [[ ! -d "$nc_dir" ]]; then
+      info "Building dependency: ncurses ${nc_version}"
+      curl -fsSL "$nc_url" -o "$LOCAL_SRC/ncurses.tar.gz"
+      tar -xzf "$LOCAL_SRC/ncurses.tar.gz" -C "$LOCAL_SRC"
+      rm -f "$LOCAL_SRC/ncurses.tar.gz"
+    fi
+
+    cd "$nc_dir"
+    ./configure --prefix="$LOCAL_PREFIX" --with-shared --without-debug 2>&1 | tail -3
+    make -j"$(nproc 2>/dev/null || echo 2)" 2>&1 | tail -3
+    make install 2>&1 | tail -3
+    cd "$REPO_DIR"
+  fi
+
+  # ── tmux ──
+  local tmux_version="3.4"
+  local tmux_url="https://github.com/tmux/tmux/releases/download/${tmux_version}/tmux-${tmux_version}.tar.gz"
+  local tmux_dir="$LOCAL_SRC/tmux-${tmux_version}"
+
+  if [[ ! -d "$tmux_dir" ]]; then
+    curl -fsSL "$tmux_url" -o "$LOCAL_SRC/tmux.tar.gz"
+    tar -xzf "$LOCAL_SRC/tmux.tar.gz" -C "$LOCAL_SRC"
+    rm -f "$LOCAL_SRC/tmux.tar.gz"
+  fi
+
+  cd "$tmux_dir"
+  PKG_CONFIG_PATH="$LOCAL_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}" \
+  CFLAGS="-I$LOCAL_PREFIX/include -I$LOCAL_PREFIX/include/ncurses" \
+  LDFLAGS="-L$LOCAL_PREFIX/lib" \
+    ./configure --prefix="$LOCAL_PREFIX" 2>&1 | tail -3
+  make -j"$(nproc 2>/dev/null || echo 2)" 2>&1 | tail -3
+  make install 2>&1 | tail -3
+  cd "$REPO_DIR"
+
+  has tmux && success "tmux $tmux_version installed to $LOCAL_PREFIX/bin/tmux" \
+           || die "tmux build failed"
+}
+
+_build_vim() {
+  if has vim; then return; fi
+  info "Building vim from source (into $LOCAL_PREFIX)..."
+
+  local vim_version="9.1.0"
+  local vim_url="https://github.com/vim/vim/archive/refs/tags/v${vim_version}.tar.gz"
+  local vim_dir="$LOCAL_SRC/vim-${vim_version}"
+
+  if [[ ! -d "$vim_dir" ]]; then
+    curl -fsSL "$vim_url" -o "$LOCAL_SRC/vim.tar.gz"
+    tar -xzf "$LOCAL_SRC/vim.tar.gz" -C "$LOCAL_SRC"
+    rm -f "$LOCAL_SRC/vim.tar.gz"
+  fi
+
+  cd "$vim_dir"
+  ./configure --prefix="$LOCAL_PREFIX" --with-features=huge --enable-multibyte 2>&1 | tail -3
+  make -j"$(nproc 2>/dev/null || echo 2)" 2>&1 | tail -3
+  make install 2>&1 | tail -3
+  cd "$REPO_DIR"
+
+  has vim && success "vim installed to $LOCAL_PREFIX/bin/vim" \
+          || die "vim build failed"
 }
 
 # ─── Backup & Deploy ─────────────────────────────────────────────────────────
@@ -161,10 +298,12 @@ install_prerequisites() {
   if $HAS_SUDO; then
     info "Sudo access: available"
   else
-    warn "Sudo access: unavailable (user-level setup only)"
+    warn "Sudo access: unavailable -- will build from source if needed"
   fi
 
-  # Install Homebrew on macOS if missing (doesn't need sudo on modern macOS)
+  ensure_local_path
+
+  # Install Homebrew on macOS if missing
   if [[ "$OS" == "macos" ]] && ! has brew; then
     info "Installing Homebrew..."
     NONINTERACTIVE=1 /bin/bash -c \
@@ -183,44 +322,46 @@ install_prerequisites() {
     sudo_run apt-get update -qq
   fi
 
-  # Check which tools are missing
-  local missing=()
-  has git  || missing+=(git)
-  has zsh  || missing+=(zsh)
-  has tmux || missing+=(tmux)
-  has vim  || missing+=(vim)
-  has curl || missing+=(curl)
-
-  if [[ ${#missing[@]} -gt 0 ]]; then
-    if $HAS_SUDO || [[ "$(pkg_manager)" == "brew" ]]; then
-      install_pkg "${missing[@]}"
-    else
-      warn "Missing tools: ${missing[*]}"
-      warn "No sudo access -- cannot install system packages"
-
-      # Check which critical tools are truly missing (git & curl are essential)
-      local critical_missing=()
-      has git  || critical_missing+=(git)
-      has curl || critical_missing+=(curl)
-
-      if [[ ${#critical_missing[@]} -gt 0 ]]; then
-        die "Cannot proceed without: ${critical_missing[*]}. Ask your admin to install them."
-      fi
-
-      # zsh/tmux/vim are nice-to-have; we can still deploy configs
-      if ! has zsh; then
-        warn "zsh not found -- will deploy .zshrc anyway (usable once zsh is installed)"
-      fi
-      if ! has tmux; then
-        warn "tmux not found -- will deploy .tmux.conf anyway"
-      fi
-      if ! has vim; then
-        warn "vim not found -- will deploy .vimrc anyway"
-      fi
-    fi
+  # Ensure basic build tools exist (needed for source builds)
+  if ! $HAS_SUDO && [[ "$(pkg_manager)" != "brew" ]]; then
+    for tool in make gcc; do
+      has "$tool" || die "'$tool' is required to build from source but not found. Ask your admin to install build-essential."
+    done
   fi
 
-  success "Prerequisite check complete"
+  # Check and install each required tool
+  local tools=(git curl zsh tmux vim)
+  local missing=()
+
+  for t in "${tools[@]}"; do
+    has "$t" || missing+=("$t")
+  done
+
+  if [[ ${#missing[@]} -eq 0 ]]; then
+    success "All prerequisites already installed"
+    return
+  fi
+
+  info "Missing tools: ${missing[*]}"
+
+  # Try system package manager first
+  if $HAS_SUDO || [[ "$(pkg_manager)" == "brew" ]]; then
+    install_pkg "${missing[@]}" && missing=()
+  fi
+
+  # Build anything still missing from source
+  for t in "${missing[@]}"; do
+    if ! has "$t"; then
+      install_from_source "$t"
+    fi
+  done
+
+  # Final verification
+  for cmd in git curl zsh; do
+    has "$cmd" || die "$cmd is still missing after installation attempts"
+  done
+
+  success "All prerequisites satisfied"
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -362,46 +503,70 @@ set_default_shell() {
     return
   fi
 
-  # Without sudo: can't modify /etc/shells or run chsh reliably
-  if ! $HAS_SUDO; then
-    warn "No sudo access -- cannot change default shell"
-    info "Workaround: adding 'exec zsh' to ~/.bashrc"
+  # With sudo: standard chsh approach
+  if $HAS_SUDO; then
+    if ! grep -qx "$zsh_path" /etc/shells 2>/dev/null; then
+      info "Adding $zsh_path to /etc/shells"
+      echo "$zsh_path" | sudo_run tee -a /etc/shells >/dev/null
+    fi
 
-    # Add exec zsh to .bashrc if not already there
-    local bashrc="$HOME/.bashrc"
-    local marker="# >>> terminal-automation: auto-launch zsh >>>"
-    if [[ -f "$bashrc" ]] && grep -qF "$marker" "$bashrc"; then
-      success "Auto-launch zsh already configured in ~/.bashrc"
-    else
-      cat >> "$bashrc" <<'BASHRC'
-
-# >>> terminal-automation: auto-launch zsh >>>
-# Automatically start zsh when bash is launched interactively.
-# Remove this block if you want to revert to bash.
-if [ -x "$(command -v zsh)" ] && [ -z "$ZSH_VERSION" ]; then
-  exec zsh -l
-fi
-# <<< terminal-automation: auto-launch zsh <<<
-BASHRC
-      success "Added auto-launch zsh to ~/.bashrc"
+    if has chsh; then
+      info "Changing default shell to zsh..."
+      chsh -s "$zsh_path" 2>/dev/null && success "Default shell changed to zsh" \
+        || warn "Could not change shell automatically. Run: chsh -s $zsh_path"
     fi
     return
   fi
 
-  # With sudo: standard chsh approach
-  # Ensure zsh is in /etc/shells
-  if ! grep -qx "$zsh_path" /etc/shells 2>/dev/null; then
-    info "Adding $zsh_path to /etc/shells"
-    echo "$zsh_path" | sudo_run tee -a /etc/shells >/dev/null
+  # Without sudo: inject `exec zsh` into ~/.bashrc
+  warn "No sudo access -- cannot use chsh"
+  info "Workaround: adding 'exec zsh' to ~/.bashrc"
+
+  local bashrc="$HOME/.bashrc"
+  local marker="# >>> terminal-automation: auto-launch zsh >>>"
+
+  if [[ -f "$bashrc" ]] && grep -qF "$marker" "$bashrc"; then
+    success "Auto-launch zsh already configured in ~/.bashrc"
+  else
+    cat >> "$bashrc" <<BASHRC
+
+$marker
+# Automatically start zsh when bash is launched interactively.
+# Remove this block if you want to revert to bash.
+if [ -x "$zsh_path" ] && [ -z "\$ZSH_VERSION" ]; then
+  export PATH="$LOCAL_PREFIX/bin:\$PATH"
+  exec "$zsh_path" -l
+fi
+# <<< terminal-automation: auto-launch zsh <<<
+BASHRC
+    success "Added auto-launch zsh to ~/.bashrc"
+  fi
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  STEP 7: Ensure ~/.local/bin in shell profile (persistent PATH)
+# ══════════════════════════════════════════════════════════════════════════════
+ensure_persistent_path() {
+  # Only needed if we installed things to ~/.local
+  if [[ ! -d "$LOCAL_PREFIX/bin" ]] || [[ "$(ls -A "$LOCAL_PREFIX/bin" 2>/dev/null)" == "" ]]; then
+    return
   fi
 
-  if has chsh; then
-    info "Changing default shell to zsh..."
-    chsh -s "$zsh_path" 2>/dev/null && success "Default shell changed to zsh" \
-      || warn "Could not change shell automatically. Run: chsh -s $zsh_path"
-  else
-    warn "chsh not found. Manually set your shell to: $zsh_path"
+  local marker="# >>> terminal-automation: local PATH >>>"
+
+  # Add to .zshrc.local so it persists
+  local local_rc="$HOME/.zshrc.local"
+  if [[ -f "$local_rc" ]] && grep -qF "$marker" "$local_rc"; then
+    return
   fi
+
+  cat >> "$local_rc" <<PATHRC
+
+$marker
+export PATH="$LOCAL_PREFIX/bin:\$PATH"
+# <<< terminal-automation: local PATH <<<
+PATHRC
+  success "Added $LOCAL_PREFIX/bin to PATH in ~/.zshrc.local"
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -423,6 +588,7 @@ main() {
   setup_vim
   install_fonts
   set_default_shell
+  ensure_persistent_path
 
   # ── Summary ──
   printf "\n"
