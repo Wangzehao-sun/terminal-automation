@@ -624,19 +624,35 @@ ensure_persistent_path() {
 
   local marker="# >>> terminal-automation: local PATH >>>"
 
-  # Add to .zshrc.local so it persists
+  # Add to .zshrc.local so zsh has it
   local local_rc="$HOME/.zshrc.local"
-  if [[ -f "$local_rc" ]] && grep -qF "$marker" "$local_rc"; then
-    return
-  fi
-
-  cat >> "$local_rc" <<PATHRC
+  if ! grep -qF "$marker" "$local_rc" 2>/dev/null; then
+    cat >> "$local_rc" <<PATHRC
 
 $marker
 export PATH="$LOCAL_PREFIX/bin:\$PATH"
 # <<< terminal-automation: local PATH <<<
 PATHRC
-  success "Added $LOCAL_PREFIX/bin to PATH in ~/.zshrc.local"
+    success "Added $LOCAL_PREFIX/bin to PATH in ~/.zshrc.local"
+  fi
+
+  # Also add to .bashrc so bash login shells can find zsh
+  local bashrc="$HOME/.bashrc"
+  local path_marker="# >>> terminal-automation: local PATH (bash) >>>"
+  if ! grep -qF "$path_marker" "$bashrc" 2>/dev/null; then
+    # Insert PATH at the TOP of .bashrc (before the exec zsh block)
+    local tmp
+    tmp="$(mktemp)"
+    {
+      echo "$path_marker"
+      echo "export PATH=\"$LOCAL_PREFIX/bin:\$PATH\""
+      echo "# <<< terminal-automation: local PATH (bash) <<<"
+      echo ""
+      cat "$bashrc" 2>/dev/null
+    } > "$tmp"
+    mv "$tmp" "$bashrc"
+    success "Added $LOCAL_PREFIX/bin to PATH in ~/.bashrc"
+  fi
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -674,7 +690,18 @@ main() {
 
   printf "\n"
   printf "  ${BOLD}Next steps:${RESET}\n"
-  printf "  ${DIM}1.${RESET} Open a new terminal (or run: ${CYAN}exec zsh${RESET})\n"
+
+  # Show the correct command to launch zsh based on where it lives
+  local zsh_cmd
+  if command -v zsh &>/dev/null; then
+    zsh_cmd="exec zsh"
+  elif [[ -x "$LOCAL_PREFIX/bin/zsh" ]]; then
+    zsh_cmd="exec $LOCAL_PREFIX/bin/zsh -l"
+  else
+    zsh_cmd="exec zsh"
+  fi
+  printf "  ${DIM}1.${RESET} Start zsh now: ${CYAN}%s${RESET}\n" "$zsh_cmd"
+  printf "     (New terminals will auto-launch zsh via ~/.bashrc)\n"
   printf "  ${DIM}2.${RESET} Set terminal font to: ${CYAN}MesloLGS NF${RESET}\n"
   printf "  ${DIM}3.${RESET} (Optional) Add secrets to: ${CYAN}~/.zshrc.local${RESET}\n"
   printf "     e.g. export GITHUB_TOKEN=\"your_token_here\"\n"
