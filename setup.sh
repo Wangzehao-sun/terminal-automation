@@ -124,11 +124,92 @@ install_from_source() {
   mkdir -p "$LOCAL_SRC"
 
   case "$tool" in
-    zsh)   _build_zsh ;;
-    tmux)  _build_tmux ;;
-    vim)   _build_vim ;;
+    zsh)   _build_ncurses; _build_zsh ;;
+    tmux)  _build_ncurses; _build_libevent; _build_tmux ;;
+    vim)   _build_ncurses; _build_vim ;;
     *)     die "Don't know how to build: $tool" ;;
   esac
+}
+
+# Check if ncurses development headers are available (system or local)
+_has_ncurses_dev() {
+  # Check local build first
+  [[ -f "$LOCAL_PREFIX/include/ncurses.h" ]] && return 0
+  [[ -f "$LOCAL_PREFIX/include/ncurses/ncurses.h" ]] && return 0
+  # Check system paths
+  [[ -f "/usr/include/ncurses.h" ]] && return 0
+  [[ -f "/usr/include/ncurses/ncurses.h" ]] && return 0
+  [[ -f "/usr/include/curses.h" ]] && return 0
+  # Check via pkg-config
+  pkg-config --exists ncurses 2>/dev/null && return 0
+  return 1
+}
+
+_build_ncurses() {
+  # Skip if headers already available (system-wide or locally built)
+  if _has_ncurses_dev; then return; fi
+
+  info "Building dependency: ncurses (dev headers missing on system)"
+
+  local nc_version="6.4"
+  local nc_url="https://ftp.gnu.org/gnu/ncurses/ncurses-${nc_version}.tar.gz"
+  local nc_dir="$LOCAL_SRC/ncurses-${nc_version}"
+
+  if [[ ! -d "$nc_dir" ]]; then
+    curl -fsSL "$nc_url" -o "$LOCAL_SRC/ncurses.tar.gz"
+    tar -xzf "$LOCAL_SRC/ncurses.tar.gz" -C "$LOCAL_SRC"
+    rm -f "$LOCAL_SRC/ncurses.tar.gz"
+  fi
+
+  cd "$nc_dir"
+  ./configure --prefix="$LOCAL_PREFIX" \
+    --with-shared \
+    --with-default-terminfo-dir="$LOCAL_PREFIX/share/terminfo" \
+    --without-debug \
+    --enable-widec 2>&1 | tail -3
+  make -j"$(nproc 2>/dev/null || echo 2)" 2>&1 | tail -3
+  make install 2>&1 | tail -3
+  cd "$REPO_DIR"
+
+  # Create non-wide symlinks (many programs look for -lncurses not -lncursesw)
+  if [[ -f "$LOCAL_PREFIX/lib/libncursesw.so" ]] && [[ ! -f "$LOCAL_PREFIX/lib/libncurses.so" ]]; then
+    ln -sf libncursesw.so "$LOCAL_PREFIX/lib/libncurses.so"
+  fi
+  if [[ -f "$LOCAL_PREFIX/lib/libncursesw.a" ]] && [[ ! -f "$LOCAL_PREFIX/lib/libncurses.a" ]]; then
+    ln -sf libncursesw.a "$LOCAL_PREFIX/lib/libncurses.a"
+  fi
+  # Symlink curses.h for compatibility
+  if [[ -f "$LOCAL_PREFIX/include/ncursesw/ncurses.h" ]] && [[ ! -f "$LOCAL_PREFIX/include/ncurses.h" ]]; then
+    ln -sf ncursesw/ncurses.h "$LOCAL_PREFIX/include/ncurses.h"
+    ln -sf ncursesw/curses.h "$LOCAL_PREFIX/include/curses.h"
+    ln -sf ncursesw/term.h "$LOCAL_PREFIX/include/term.h"
+  fi
+
+  success "ncurses installed to $LOCAL_PREFIX"
+}
+
+_build_libevent() {
+  if [[ -f "$LOCAL_PREFIX/lib/libevent.a" ]]; then return; fi
+
+  info "Building dependency: libevent"
+
+  local ev_version="2.1.12"
+  local ev_url="https://github.com/libevent/libevent/releases/download/release-${ev_version}-stable/libevent-${ev_version}-stable.tar.gz"
+  local ev_dir="$LOCAL_SRC/libevent-${ev_version}-stable"
+
+  if [[ ! -d "$ev_dir" ]]; then
+    curl -fsSL "$ev_url" -o "$LOCAL_SRC/libevent.tar.gz"
+    tar -xzf "$LOCAL_SRC/libevent.tar.gz" -C "$LOCAL_SRC"
+    rm -f "$LOCAL_SRC/libevent.tar.gz"
+  fi
+
+  cd "$ev_dir"
+  ./configure --prefix="$LOCAL_PREFIX" --disable-shared 2>&1 | tail -3
+  make -j"$(nproc 2>/dev/null || echo 2)" 2>&1 | tail -3
+  make install 2>&1 | tail -3
+  cd "$REPO_DIR"
+
+  success "libevent installed to $LOCAL_PREFIX"
 }
 
 _build_zsh() {
@@ -146,7 +227,12 @@ _build_zsh() {
   fi
 
   cd "$src_dir"
-  ./configure --prefix="$LOCAL_PREFIX" --without-tcsetpgrp 2>&1 | tail -3
+  CFLAGS="-I$LOCAL_PREFIX/include" \
+  LDFLAGS="-L$LOCAL_PREFIX/lib" \
+  CPPFLAGS="-I$LOCAL_PREFIX/include" \
+    ./configure --prefix="$LOCAL_PREFIX" \
+      --enable-multibyte \
+      --without-tcsetpgrp 2>&1 | tail -3
   make -j"$(nproc 2>/dev/null || echo 2)" 2>&1 | tail -3
   make install 2>&1 | tail -3
   cd "$REPO_DIR"
@@ -158,46 +244,6 @@ _build_zsh() {
 _build_tmux() {
   if has tmux; then return; fi
   info "Building tmux from source (into $LOCAL_PREFIX)..."
-
-  # ── libevent (tmux dependency) ──
-  if [[ ! -f "$LOCAL_PREFIX/lib/libevent.a" ]]; then
-    local ev_version="2.1.12"
-    local ev_url="https://github.com/libevent/libevent/releases/download/release-${ev_version}-stable/libevent-${ev_version}-stable.tar.gz"
-    local ev_dir="$LOCAL_SRC/libevent-${ev_version}-stable"
-
-    if [[ ! -d "$ev_dir" ]]; then
-      info "Building dependency: libevent ${ev_version}"
-      curl -fsSL "$ev_url" -o "$LOCAL_SRC/libevent.tar.gz"
-      tar -xzf "$LOCAL_SRC/libevent.tar.gz" -C "$LOCAL_SRC"
-      rm -f "$LOCAL_SRC/libevent.tar.gz"
-    fi
-
-    cd "$ev_dir"
-    ./configure --prefix="$LOCAL_PREFIX" --disable-shared 2>&1 | tail -3
-    make -j"$(nproc 2>/dev/null || echo 2)" 2>&1 | tail -3
-    make install 2>&1 | tail -3
-    cd "$REPO_DIR"
-  fi
-
-  # ── ncurses (tmux dependency, if not present) ──
-  if [[ ! -f "$LOCAL_PREFIX/lib/libncurses.a" ]] && ! pkg-config ncurses 2>/dev/null; then
-    local nc_version="6.4"
-    local nc_url="https://ftp.gnu.org/gnu/ncurses/ncurses-${nc_version}.tar.gz"
-    local nc_dir="$LOCAL_SRC/ncurses-${nc_version}"
-
-    if [[ ! -d "$nc_dir" ]]; then
-      info "Building dependency: ncurses ${nc_version}"
-      curl -fsSL "$nc_url" -o "$LOCAL_SRC/ncurses.tar.gz"
-      tar -xzf "$LOCAL_SRC/ncurses.tar.gz" -C "$LOCAL_SRC"
-      rm -f "$LOCAL_SRC/ncurses.tar.gz"
-    fi
-
-    cd "$nc_dir"
-    ./configure --prefix="$LOCAL_PREFIX" --with-shared --without-debug 2>&1 | tail -3
-    make -j"$(nproc 2>/dev/null || echo 2)" 2>&1 | tail -3
-    make install 2>&1 | tail -3
-    cd "$REPO_DIR"
-  fi
 
   # ── tmux ──
   local tmux_version="3.4"
@@ -238,7 +284,12 @@ _build_vim() {
   fi
 
   cd "$vim_dir"
-  ./configure --prefix="$LOCAL_PREFIX" --with-features=huge --enable-multibyte 2>&1 | tail -3
+  CFLAGS="-I$LOCAL_PREFIX/include" \
+  LDFLAGS="-L$LOCAL_PREFIX/lib" \
+    ./configure --prefix="$LOCAL_PREFIX" \
+      --with-features=huge \
+      --enable-multibyte \
+      --with-tlib=ncurses 2>&1 | tail -3
   make -j"$(nproc 2>/dev/null || echo 2)" 2>&1 | tail -3
   make install 2>&1 | tail -3
   cd "$REPO_DIR"
