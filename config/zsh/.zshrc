@@ -74,3 +74,7 @@ fi
 # Source a local file for machine-specific settings (tokens, paths, etc.)
 # This file is NOT tracked by git.
 [[ -f "$HOME/.zshrc.local" ]] && source "$HOME/.zshrc.local"
+
+: # ensure .zshrc ends with exit code 0
+
+: # ensure .zshrc ends with exit code 0

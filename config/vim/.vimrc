@@ -20,7 +20,6 @@ set fileformats=unix,dos,mac  " 换行符兼容顺序：优先 unix 风格
 " 界面显示
 " ============================================================================
 set number                    " 显示行号
-set relativenumber            " 显示相对行号（配合 number 形成混合行号，方便跳转）
 set cursorline                " 高亮当前行
 set ruler                     " 状态栏显示光标位置
 set showmatch                 " 输入括号时高亮匹配的另一半
