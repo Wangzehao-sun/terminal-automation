@@ -14,6 +14,7 @@ BACKUP_DIR="$HOME/.dotfiles-backup/$(date +%Y%m%d_%H%M%S)"
 LOCAL_PREFIX="$HOME/.local"
 LOCAL_SRC="$HOME/.local/src"
 HAS_SUDO=false
+FORCE=false
 
 # ─── Colors & Formatting ─────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -307,12 +308,77 @@ backup_file() {
   fi
 }
 
+# Backup without removing the source (used in interactive mode)
+backup_copy() {
+  local target="$1"
+  if [[ -e "$target" || -L "$target" ]]; then
+    mkdir -p "$BACKUP_DIR"
+    cp "$target" "$BACKUP_DIR/"
+    info "Backed up: $target -> $BACKUP_DIR/"
+  fi
+}
+
 deploy_config() {
   local src="$1"
   local dst="$2"
-  backup_file "$dst"
-  cp "$src" "$dst"
-  success "Deployed: $dst"
+
+  # ── Case 1: target doesn't exist → just deploy ──
+  if [[ ! -e "$dst" ]]; then
+    cp "$src" "$dst"
+    success "Deployed: $dst"
+    return
+  fi
+
+  # ── Case 2: identical → no-op ──
+  if cmp -s "$src" "$dst"; then
+    info "Up to date: $(basename "$dst")"
+    return
+  fi
+
+  # ── Case 3: differs ──
+  # --force / FORCE=1 always overwrites (with backup)
+  if $FORCE; then
+    backup_copy "$dst"
+    cp "$src" "$dst"
+    success "Updated (forced): $dst"
+    return
+  fi
+
+  # Non-interactive (no TTY) → preserve local changes
+  if [[ ! -t 0 ]]; then
+    warn "Local file modified, preserving: $dst (use --force to overwrite)"
+    return
+  fi
+
+  # Interactive: ask user
+  warn "Local file differs from repo: $dst"
+  while true; do
+    printf "  ${BOLD}Action:${RESET} [${CYAN}d${RESET}]iff / [${CYAN}o${RESET}]verwrite / [${CYAN}s${RESET}]kip / [${CYAN}a${RESET}]bort? "
+    read -r choice </dev/tty || { warn "No TTY; preserving local file"; return; }
+    case "${choice:-s}" in
+      d|D|diff)
+        printf "\n${DIM}--- local (%s)\n+++ repo  (%s)${RESET}\n" "$dst" "$src"
+        diff -u "$dst" "$src" || true
+        printf "\n"
+        ;;
+      o|O|overwrite)
+        backup_copy "$dst"
+        cp "$src" "$dst"
+        success "Updated: $dst"
+        return
+        ;;
+      s|S|skip|"")
+        info "Skipped: $dst (kept local version)"
+        return
+        ;;
+      a|A|abort)
+        die "Aborted by user"
+        ;;
+      *)
+        printf "  Invalid choice. Use d/o/s/a.\n"
+        ;;
+    esac
+  done
 }
 
 # ─── Clone / Update a Git Repo ───────────────────────────────────────────────
@@ -726,53 +792,39 @@ setup_claude() {
     return
   fi
 
-  # Backup helper that targets the Claude backup subdir
-  local claude_backup="$BACKUP_DIR/claude-internal"
-
-  _backup_claude() {
-    local target="$1"
-    if [[ -e "$target" ]]; then
-      mkdir -p "$claude_backup"
-      cp -R "$target" "$claude_backup/"
-      info "Backed up: $target"
-    fi
-  }
-
   # ── settings.json ──
-  if [[ -f "$src/settings.json" ]]; then
-    _backup_claude "$dst/settings.json"
-    cp "$src/settings.json" "$dst/settings.json"
-    success "settings.json"
-  fi
+  [[ -f "$src/settings.json" ]] && deploy_config "$src/settings.json" "$dst/settings.json"
 
   # ── CLAUDE.md ──
-  if [[ -f "$src/CLAUDE.md" ]]; then
-    _backup_claude "$dst/CLAUDE.md"
-    cp "$src/CLAUDE.md" "$dst/CLAUDE.md"
-    success "CLAUDE.md (global memory)"
-  fi
+  [[ -f "$src/CLAUDE.md" ]] && deploy_config "$src/CLAUDE.md" "$dst/CLAUDE.md"
 
   # ── keybindings.json ──
-  if [[ -f "$src/keybindings.json" ]]; then
-    _backup_claude "$dst/keybindings.json"
-    cp "$src/keybindings.json" "$dst/keybindings.json"
-    success "keybindings.json"
-  fi
+  [[ -f "$src/keybindings.json" ]] && deploy_config "$src/keybindings.json" "$dst/keybindings.json"
 
-  # ── agents/ ──
+  # ── agents/ (directory; full sync) ──
   if [[ -d "$src/agents" ]]; then
-    _backup_claude "$dst/agents"
-    rm -rf "$dst/agents"
-    cp -R "$src/agents" "$dst/agents"
-    success "agents/ ($(ls "$dst/agents" 2>/dev/null | wc -l | tr -d ' ') items)"
+    if [[ -d "$dst/agents" ]] && diff -rq "$src/agents" "$dst/agents" &>/dev/null; then
+      info "Up to date: agents/"
+    else
+      mkdir -p "$BACKUP_DIR/claude-internal"
+      [[ -d "$dst/agents" ]] && cp -R "$dst/agents" "$BACKUP_DIR/claude-internal/" 2>/dev/null || true
+      rm -rf "$dst/agents"
+      cp -R "$src/agents" "$dst/agents"
+      success "agents/ ($(ls "$dst/agents" 2>/dev/null | wc -l | tr -d ' ') items)"
+    fi
   fi
 
-  # ── commands/ ──
+  # ── commands/ (directory; full sync) ──
   if [[ -d "$src/commands" ]]; then
-    _backup_claude "$dst/commands"
-    rm -rf "$dst/commands"
-    cp -R "$src/commands" "$dst/commands"
-    success "commands/ ($(ls "$dst/commands" 2>/dev/null | wc -l | tr -d ' ') items)"
+    if [[ -d "$dst/commands" ]] && diff -rq "$src/commands" "$dst/commands" &>/dev/null; then
+      info "Up to date: commands/"
+    else
+      mkdir -p "$BACKUP_DIR/claude-internal"
+      [[ -d "$dst/commands" ]] && cp -R "$dst/commands" "$BACKUP_DIR/claude-internal/" 2>/dev/null || true
+      rm -rf "$dst/commands"
+      cp -R "$src/commands" "$dst/commands"
+      success "commands/ ($(ls "$dst/commands" 2>/dev/null | wc -l | tr -d ' ') items)"
+    fi
   fi
 }
 
@@ -785,13 +837,21 @@ main() {
   for arg in "$@"; do
     case "$arg" in
       --with-claude|--claude) with_claude=true ;;
+      --force|-f) FORCE=true ;;
       -h|--help)
         cat <<HELP
 Usage: ./setup.sh [options]
 
 Options:
+  --force, -f      Overwrite local configs even if modified (default: ask)
   --with-claude    Also deploy Claude Code config from config/claude/
   -h, --help       Show this help
+
+Default behavior on re-run:
+  - Files identical to repo:  skipped (already in sync)
+  - Files locally modified:   prompts you to diff/overwrite/skip
+  - With --force:             always overwrites (backups kept)
+  - In non-interactive shell: preserves local changes
 
 Run ./snapshot-claude.sh to capture current Claude config into the repo.
 HELP
