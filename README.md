@@ -49,16 +49,47 @@ export GITHUB_TOKEN="your_token_here"
 export CUSTOM_PATH="/some/local/path"
 ```
 
+## Claude Code Config (optional)
+
+Sync your Claude Code settings, custom agents, and slash commands across machines.
+
+**On your main machine** (capture current config into the repo):
+
+```bash
+./snapshot-claude.sh
+git add config/claude/
+git commit -m "Update Claude config"
+git push
+```
+
+**On a new machine** (deploy):
+
+```bash
+./setup.sh --with-claude
+```
+
+What gets synced (from `~/.claude-internal/`):
+- `settings.json` — model, theme, plugins, statusline
+- `CLAUDE.md` — global memory (if present)
+- `keybindings.json` — custom keybindings (if present)
+- `agents/` — custom subagents
+- `commands/` — custom slash commands
+
+What is **not** synced (machine-specific / sensitive):
+- `.claude.json` (auth tokens), sessions, projects, history, runtime state
+
 ## Project Structure
 
 ```
 terminal-automation/
 ├── setup.sh                 # Main installer (run this)
+├── snapshot-claude.sh       # Capture current Claude config -> repo
 ├── config/
 │   ├── zsh/.zshrc           # Zsh configuration
 │   ├── zsh/.p10k.zsh        # Powerlevel10k theme config
 │   ├── tmux/.tmux.conf      # Tmux configuration
-│   └── vim/.vimrc           # Vim configuration
+│   ├── vim/.vimrc           # Vim configuration
+│   └── claude/              # Claude Code config (optional, populated by snapshot-claude.sh)
 └── README.md
 ```
 

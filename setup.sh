@@ -704,9 +704,102 @@ PATHRC
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  STEP 8: Claude Code Configuration (optional)
+# ══════════════════════════════════════════════════════════════════════════════
+setup_claude() {
+  step "Setting up Claude Code config"
+
+  local src="$CONFIG_DIR/claude"
+  local dst="$HOME/.claude-internal"
+
+  # Skip if no Claude config exists in this repo
+  if [[ ! -d "$src" ]] || [[ -z "$(ls -A "$src" 2>/dev/null)" ]]; then
+    info "No Claude config found in repo (config/claude/) -- skipping"
+    info "To populate: run ./snapshot-claude.sh on the source machine"
+    return
+  fi
+
+  # Skip if Claude isn't installed (no .claude-internal/ directory)
+  if [[ ! -d "$dst" ]]; then
+    warn "Claude Code not installed (no ~/.claude-internal/) -- skipping"
+    info "Install Claude Code first, then re-run this with --claude"
+    return
+  fi
+
+  # Backup helper that targets the Claude backup subdir
+  local claude_backup="$BACKUP_DIR/claude-internal"
+
+  _backup_claude() {
+    local target="$1"
+    if [[ -e "$target" ]]; then
+      mkdir -p "$claude_backup"
+      cp -R "$target" "$claude_backup/"
+      info "Backed up: $target"
+    fi
+  }
+
+  # ── settings.json ──
+  if [[ -f "$src/settings.json" ]]; then
+    _backup_claude "$dst/settings.json"
+    cp "$src/settings.json" "$dst/settings.json"
+    success "settings.json"
+  fi
+
+  # ── CLAUDE.md ──
+  if [[ -f "$src/CLAUDE.md" ]]; then
+    _backup_claude "$dst/CLAUDE.md"
+    cp "$src/CLAUDE.md" "$dst/CLAUDE.md"
+    success "CLAUDE.md (global memory)"
+  fi
+
+  # ── keybindings.json ──
+  if [[ -f "$src/keybindings.json" ]]; then
+    _backup_claude "$dst/keybindings.json"
+    cp "$src/keybindings.json" "$dst/keybindings.json"
+    success "keybindings.json"
+  fi
+
+  # ── agents/ ──
+  if [[ -d "$src/agents" ]]; then
+    _backup_claude "$dst/agents"
+    rm -rf "$dst/agents"
+    cp -R "$src/agents" "$dst/agents"
+    success "agents/ ($(ls "$dst/agents" 2>/dev/null | wc -l | tr -d ' ') items)"
+  fi
+
+  # ── commands/ ──
+  if [[ -d "$src/commands" ]]; then
+    _backup_claude "$dst/commands"
+    rm -rf "$dst/commands"
+    cp -R "$src/commands" "$dst/commands"
+    success "commands/ ($(ls "$dst/commands" 2>/dev/null | wc -l | tr -d ' ') items)"
+  fi
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  Main
 # ══════════════════════════════════════════════════════════════════════════════
 main() {
+  # Parse CLI flags
+  local with_claude=false
+  for arg in "$@"; do
+    case "$arg" in
+      --with-claude|--claude) with_claude=true ;;
+      -h|--help)
+        cat <<HELP
+Usage: ./setup.sh [options]
+
+Options:
+  --with-claude    Also deploy Claude Code config from config/claude/
+  -h, --help       Show this help
+
+Run ./snapshot-claude.sh to capture current Claude config into the repo.
+HELP
+        exit 0
+        ;;
+    esac
+  done
+
   printf "\n"
   printf "${BOLD}${CYAN}"
   printf "  ╔══════════════════════════════════════════════════╗\n"
@@ -724,6 +817,7 @@ main() {
   install_fonts
   set_default_shell
   ensure_persistent_path
+  $with_claude && setup_claude
 
   # ── Summary ──
   printf "\n"
