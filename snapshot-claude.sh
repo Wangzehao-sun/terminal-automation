@@ -34,6 +34,20 @@ printf "  ${SRC} -> ${DST}\n\n"
 # ── settings.json ──
 if [[ -f "$SRC/settings.json" ]]; then
   cp "$SRC/settings.json" "$DST/settings.json"
+  # Sanitize: replace hardcoded node path with dynamic lookup (claude-hud statusline)
+  if grep -q '/Users/[^"]*/node\|/home/[^"]*/node' "$DST/settings.json"; then
+    sed -E -i.bak 's|\\"(/Users/[^/]*/.nvm/[^"]*node\|/home/[^/]*/[^"]*node)\\"|\\"$(command -v node)\\"|g' "$DST/settings.json" 2>/dev/null \
+      || python3 -c "
+import json,sys,re
+p='$DST/settings.json'
+d=json.load(open(p))
+if 'statusLine' in d and 'command' in d['statusLine']:
+    d['statusLine']['command']=re.sub(r'\"/(Users|home)/[^\"]*node\"', '\"\$(command -v node)\"', d['statusLine']['command'])
+    json.dump(d, open(p,'w'), indent=2)
+"
+    rm -f "$DST/settings.json.bak"
+    info "  sanitized hardcoded node path -> \$(command -v node)"
+  fi
   success "settings.json"
 fi
 
