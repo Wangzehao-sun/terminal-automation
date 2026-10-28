@@ -461,8 +461,10 @@ install_prerequisites() {
   info "Missing tools: ${missing[*]}"
 
   # Try system package manager first
+  # (don't empty `missing` on success: iterating an empty array under `set -u`
+  # aborts on macOS's bash 3.2; the `has` check below skips installed tools)
   if $HAS_SUDO || [[ "$(pkg_manager)" == "brew" ]]; then
-    install_pkg "${missing[@]}" && missing=()
+    install_pkg "${missing[@]}" || true
   fi
 
   # Build anything still missing from source
