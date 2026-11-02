@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║  Claude Code Config Snapshot                                                 ║
-# ║  Copies your current Claude Code configuration INTO this repo so it can be   ║
-# ║  deployed on other machines via setup.sh.                                    ║
+# ║  Claude Code Statusline Snapshot                                             ║
+# ║  Copies the statusline script deployed on this machine back INTO this repo   ║
+# ║  (~/.claude/statusline.sh -> config/claude/statusline.sh).                   ║
+# ║  Only the statusline is captured for now. The reverse direction (deploy) is  ║
+# ║  config/claude/install.sh, also run by `./setup.sh --with-claude`.           ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DST="$REPO_DIR/config/claude"
-SRC="$HOME/.claude-internal"
+DST="$REPO_DIR/config/claude/statusline.sh"
+CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+SRC="$CLAUDE_DIR/statusline.sh"
+SETTINGS="$CLAUDE_DIR/settings.json"
 
 # Colors
 GREEN='\033[0;32m'
@@ -21,63 +25,44 @@ info()    { printf "${BLUE}[*]${RESET} %s\n" "$1"; }
 success() { printf "${GREEN}[✓]${RESET} %s\n" "$1"; }
 warn()    { printf "${YELLOW}[!]${RESET} %s\n" "$1"; }
 
-if [[ ! -d "$SRC" ]]; then
-  warn "$SRC does not exist -- nothing to snapshot"
+printf "\n${BOLD}Snapshotting Claude Code statusline:${RESET}\n"
+printf "  %s -> %s\n\n" "$SRC" "$DST"
+
+# ── Nothing deployed: explain why instead of failing ──
+if [[ ! -f "$SRC" ]]; then
+  if [[ -f "$SETTINGS" ]] && grep -q '"statusLine"' "$SETTINGS"; then
+    warn "$SRC not found: the statusLine in settings.json is an inline command, not statusline.sh"
+    info "Switch to the repo's script with:  bash $REPO_DIR/config/claude/install.sh"
+  else
+    warn "No statusline found in $CLAUDE_DIR -- nothing to snapshot"
+  fi
   exit 0
 fi
 
-mkdir -p "$DST"
-
-printf "\n${BOLD}Snapshotting Claude Code config:${RESET}\n"
-printf "  ${SRC} -> ${DST}\n\n"
-
-# ── settings.json ──
-if [[ -f "$SRC/settings.json" ]]; then
-  cp "$SRC/settings.json" "$DST/settings.json"
-  # Sanitize: replace hardcoded node path with dynamic lookup (claude-hud statusline)
-  if grep -q '/Users/[^"]*/node\|/home/[^"]*/node' "$DST/settings.json"; then
-    sed -E -i.bak 's|\\"(/Users/[^/]*/.nvm/[^"]*node\|/home/[^/]*/[^"]*node)\\"|\\"$(command -v node)\\"|g' "$DST/settings.json" 2>/dev/null \
-      || python3 -c "
-import json,sys,re
-p='$DST/settings.json'
-d=json.load(open(p))
-if 'statusLine' in d and 'command' in d['statusLine']:
-    d['statusLine']['command']=re.sub(r'\"/(Users|home)/[^\"]*node\"', '\"\$(command -v node)\"', d['statusLine']['command'])
-    json.dump(d, open(p,'w'), indent=2)
-"
-    rm -f "$DST/settings.json.bak"
-    info "  sanitized hardcoded node path -> \$(command -v node)"
+# ── statusline.sh ──
+if [[ -f "$DST" ]] && cmp -s "$SRC" "$DST"; then
+  success "statusline.sh (unchanged)"
+else
+  if [[ -f "$DST" ]]; then
+    diff -u "$DST" "$SRC" || true
+    printf "\n"
   fi
-  success "settings.json"
+  mkdir -p "$(dirname "$DST")"
+  cp "$SRC" "$DST"
+  success "statusline.sh"
 fi
 
-# ── CLAUDE.md (global memory) ──
-if [[ -f "$SRC/CLAUDE.md" ]]; then
-  cp "$SRC/CLAUDE.md" "$DST/CLAUDE.md"
-  success "CLAUDE.md"
+# This repo is public: keep machine-specific paths out of the script
+if grep -qF "$HOME" "$DST"; then
+  warn "statusline.sh contains your home directory ($HOME) -- use \$HOME or \$(command -v ...) before committing"
 fi
 
-# ── keybindings.json ──
-if [[ -f "$SRC/keybindings.json" ]]; then
-  cp "$SRC/keybindings.json" "$DST/keybindings.json"
-  success "keybindings.json"
-fi
-
-# ── agents/ (custom subagents) ──
-if [[ -d "$SRC/agents" ]] && [[ -n "$(ls -A "$SRC/agents" 2>/dev/null)" ]]; then
-  rm -rf "$DST/agents"
-  cp -R "$SRC/agents" "$DST/agents"
-  success "agents/ ($(ls "$DST/agents" | wc -l | tr -d ' ') items)"
-fi
-
-# ── commands/ (custom slash commands) ──
-if [[ -d "$SRC/commands" ]] && [[ -n "$(ls -A "$SRC/commands" 2>/dev/null)" ]]; then
-  rm -rf "$DST/commands"
-  cp -R "$SRC/commands" "$DST/commands"
-  success "commands/ ($(ls "$DST/commands" | wc -l | tr -d ' ') items)"
+# The deployed script only matters if settings.json actually runs it
+if [[ ! -f "$SETTINGS" ]] || ! grep -q 'statusline\.sh' "$SETTINGS"; then
+  warn "settings.json statusLine does not run statusline.sh -- run config/claude/install.sh to set it"
 fi
 
 printf "\n${GREEN}${BOLD}Snapshot complete!${RESET}\n"
-info "Review changes:  git diff config/claude/"
-info "Commit & push:   git add config/claude && git commit -m 'Update Claude config'"
+info "Review changes:  git diff config/claude/statusline.sh"
+info "Commit & push:   git add config/claude/statusline.sh && git commit -m 'Update Claude statusline'"
 printf "\n"

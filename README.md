@@ -49,47 +49,50 @@ export GITHUB_TOKEN="your_token_here"
 export CUSTOM_PATH="/some/local/path"
 ```
 
-## Claude Code Config (optional)
+## Claude Code Statusline (optional)
 
-Sync your Claude Code settings, custom agents, and slash commands across machines.
-
-**On your main machine** (capture current config into the repo):
-
-```bash
-./snapshot-claude.sh
-git add config/claude/
-git commit -m "Update Claude config"
-git push
-```
+Saves and restores the Claude Code statusline ([claude-hud](https://github.com/jarrodwatts/claude-hud)).
+Only the statusline is synced for now.
 
 **On a new machine** (deploy):
 
 ```bash
-./setup.sh --with-claude
+./setup.sh --with-claude      # as part of the full setup
+bash config/claude/install.sh # or just the statusline
 ```
 
-What gets synced (from `~/.claude-internal/`):
-- `settings.json` — model, theme, plugins, statusline
-- `CLAUDE.md` — global memory (if present)
-- `keybindings.json` — custom keybindings (if present)
-- `agents/` — custom subagents
-- `commands/` — custom slash commands
+`install.sh` is safe to re-run. It:
+- installs Claude Code with the official installer if `claude` is missing
+- installs the `claude-hud` plugin
+- copies `config/claude/statusline.sh` to `~/.claude/statusline.sh`
+- sets only the `statusLine` key in `~/.claude/settings.json` (other keys untouched, file backed up first)
 
-What is **not** synced (machine-specific / sensitive):
-- `.claude.json` (auth tokens), sessions, projects, history, runtime state
+Pass `--skip-plugin` to skip the first two steps.
+
+**On your main machine** (after editing `~/.claude/statusline.sh`):
+
+```bash
+./snapshot-claude.sh
+git add config/claude/statusline.sh
+git commit -m "Update Claude statusline"
+git push
+```
+
+What is **not** synced: model / theme / `env` (base URL, token) in `settings.json`, the plugin list,
+`CLAUDE.md`, agents, commands, and anything under `~/.claude.json`, sessions, or history.
 
 ## Project Structure
 
 ```
 terminal-automation/
 ├── setup.sh                 # Main installer (run this)
-├── snapshot-claude.sh       # Capture current Claude config -> repo
+├── snapshot-claude.sh       # Capture Claude statusline -> repo
 ├── config/
 │   ├── zsh/.zshrc           # Zsh configuration
 │   ├── zsh/.p10k.zsh        # Powerlevel10k theme config
 │   ├── tmux/.tmux.conf      # Tmux configuration
 │   ├── vim/.vimrc           # Vim configuration
-│   └── claude/              # Claude Code config (optional, populated by snapshot-claude.sh)
+│   └── claude/              # Claude Code statusline (statusline.sh + install.sh)
 └── README.md
 ```
 

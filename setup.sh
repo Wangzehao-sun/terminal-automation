@@ -772,62 +772,21 @@ PATHRC
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  STEP 8: Claude Code Configuration (optional)
+#  STEP 8: Claude Code statusline (optional)
 # ══════════════════════════════════════════════════════════════════════════════
 setup_claude() {
-  step "Setting up Claude Code config"
+  step "Setting up Claude Code statusline"
 
-  local src="$CONFIG_DIR/claude"
-  local dst="$HOME/.claude-internal"
-
-  # Skip if no Claude config exists in this repo
-  if [[ ! -d "$src" ]] || [[ -z "$(ls -A "$src" 2>/dev/null)" ]]; then
-    info "No Claude config found in repo (config/claude/) -- skipping"
-    info "To populate: run ./snapshot-claude.sh on the source machine"
+  # config/claude/install.sh is the single source of truth for the statusline:
+  # it installs the claude CLI + claude-hud if missing, deploys statusline.sh,
+  # and sets only the statusLine key in ~/.claude/settings.json. Safe to re-run.
+  local installer="$CONFIG_DIR/claude/install.sh"
+  if [[ ! -f "$installer" ]]; then
+    warn "Missing $installer -- skipping Claude Code statusline"
     return
   fi
 
-  # Skip if Claude isn't installed (no .claude-internal/ directory)
-  if [[ ! -d "$dst" ]]; then
-    warn "Claude Code not installed (no ~/.claude-internal/) -- skipping"
-    info "Install Claude Code first, then re-run this with --claude"
-    return
-  fi
-
-  # ── settings.json ──
-  [[ -f "$src/settings.json" ]] && deploy_config "$src/settings.json" "$dst/settings.json"
-
-  # ── CLAUDE.md ──
-  [[ -f "$src/CLAUDE.md" ]] && deploy_config "$src/CLAUDE.md" "$dst/CLAUDE.md"
-
-  # ── keybindings.json ──
-  [[ -f "$src/keybindings.json" ]] && deploy_config "$src/keybindings.json" "$dst/keybindings.json"
-
-  # ── agents/ (directory; full sync) ──
-  if [[ -d "$src/agents" ]]; then
-    if [[ -d "$dst/agents" ]] && diff -rq "$src/agents" "$dst/agents" &>/dev/null; then
-      info "Up to date: agents/"
-    else
-      mkdir -p "$BACKUP_DIR/claude-internal"
-      [[ -d "$dst/agents" ]] && cp -R "$dst/agents" "$BACKUP_DIR/claude-internal/" 2>/dev/null || true
-      rm -rf "$dst/agents"
-      cp -R "$src/agents" "$dst/agents"
-      success "agents/ ($(ls "$dst/agents" 2>/dev/null | wc -l | tr -d ' ') items)"
-    fi
-  fi
-
-  # ── commands/ (directory; full sync) ──
-  if [[ -d "$src/commands" ]]; then
-    if [[ -d "$dst/commands" ]] && diff -rq "$src/commands" "$dst/commands" &>/dev/null; then
-      info "Up to date: commands/"
-    else
-      mkdir -p "$BACKUP_DIR/claude-internal"
-      [[ -d "$dst/commands" ]] && cp -R "$dst/commands" "$BACKUP_DIR/claude-internal/" 2>/dev/null || true
-      rm -rf "$dst/commands"
-      cp -R "$src/commands" "$dst/commands"
-      success "commands/ ($(ls "$dst/commands" 2>/dev/null | wc -l | tr -d ' ') items)"
-    fi
-  fi
+  bash "$installer" || warn "Claude Code statusline setup did not finish (see messages above)"
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -846,7 +805,7 @@ Usage: ./setup.sh [options]
 
 Options:
   --force, -f      Overwrite local configs even if modified (default: ask)
-  --with-claude    Also deploy Claude Code config from config/claude/
+  --with-claude    Also install the Claude Code statusline (config/claude/install.sh)
   -h, --help       Show this help
 
 Default behavior on re-run:
@@ -855,7 +814,7 @@ Default behavior on re-run:
   - With --force:             always overwrites (backups kept)
   - In non-interactive shell: preserves local changes
 
-Run ./snapshot-claude.sh to capture current Claude config into the repo.
+Run ./snapshot-claude.sh to capture the Claude statusline from this machine into the repo.
 HELP
         exit 0
         ;;
